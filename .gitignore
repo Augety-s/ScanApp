@@ -1,0 +1,8 @@
+/.vs
+out
+ScanApp
+CMake Overview
+cmake.db
+ProjectSettings.json
+slnx.sqlite
+VSWorkspaceState.json
