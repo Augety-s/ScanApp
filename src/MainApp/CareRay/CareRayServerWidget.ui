@@ -140,6 +140,13 @@
       </spacer>
      </item>
      <item>
+      <widget class="QPushButton" name="clearLog">
+       <property name="text">
+        <string>清空日志</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="startServer">
        <property name="text">
         <string>启动服务</string>

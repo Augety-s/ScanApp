@@ -1,3 +1,5 @@
+#ifndef CARERAYSERVER_H
+#define CARERAYSERVER_H
 #include "CareRayAPI.h"
 #include <rpc/server.h>
 #include <string>
@@ -8,14 +10,13 @@
 #include <QDateTime>
 #include "RpcStruct.hpp"
 #include "ZmqPublisher.h"
-
-
-
-class CareRayServer
+#include <QObject>
+class CareRayServer : public QObject
 {
+	Q_OBJECT
 public:
 
-	CareRayServer();
+	CareRayServer(QObject* parent = nullptr);
 	~CareRayServer();
 	void bandSDK();
 	void startServer();
@@ -116,6 +117,12 @@ public:
 	std::string rpc_server_ip = "0.0.0.0";
 	int rpc_server_port = 8000;
 
+	//计算帧率
+	void processsFps();
+
+signals:
+	void Message(QString message);
+
 private:
 	void sendThreadLoop();
 
@@ -142,3 +149,4 @@ private:
 	std::chrono::steady_clock::time_point m_firstFrameTime;
 
 };
+#endif // CARERAYSERVER_H

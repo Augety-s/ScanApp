@@ -1,13 +1,13 @@
 #include "CareRayServer.h"
 
 #include <CrStructure.h>
-
+#include <QImage>
 // 保存当前活动的探测器实例，用于回调
 static CareRayServer* s_instance = nullptr;
 
-static int num = 1;
+static int num = 0;
 
-CareRayServer::CareRayServer()
+CareRayServer::CareRayServer(QObject* parent):QObject(parent)
 {
     s_instance = this;
 }
@@ -23,17 +23,19 @@ CareRayServer::~CareRayServer()
 void CareRayServer::bandSDK()
 {
     //心跳
-    server->bind("ping", []() {
+    server->bind("ping", [this]() {
+        emit Message("心跳");
         return true;
         });
     // 加载 SDK
     server->bind("LoadSDK", [this]() {
-        qDebug() << "LoadSDK被调用";
+        emit Message("loadSdk");
         return this->LoadSDK();
         });
 
     // 取消加载 SDK
     server->bind("DeinitializeLibrary", [this]() {
+        emit Message("取消加载Sdk");
         return this->deinitializeLibrary();
         });
 
@@ -44,16 +46,19 @@ void CareRayServer::bandSDK()
 
     // 获取探测器列表
     server->bind("GetDetectorList", [this]() {
+        emit Message("获取探测器列表");
         return this->GetDetectorList();
         });
 
     // 连接探测器
     server->bind("Connect", [this](int detectorIndex) {
+        emit Message("连接探测器");
         return this->ConnectDetector(detectorIndex);
         });
 
     // 断开连接探测器
     server->bind("Disconnect", [this](int detectorIndex) {
+        emit Message("断开连接探测器");
         return this->DisconnectDetector(detectorIndex);
         });
 
@@ -69,11 +74,13 @@ void CareRayServer::bandSDK()
 
     // 注册事件回调
     server->bind("registerEventCallback", [this]() {
+        emit Message("注册事件回调");
         return this->registerEventCallback();
         });
 
     // 注册应用模式
     server->bind("RegisterMode", [this](RegisterPara para) {
+        emit Message("注册应用模式");
         return this->RegisterMode(para);
         });
 
@@ -86,10 +93,12 @@ void CareRayServer::bandSDK()
 
     // 开始扫描
     server->bind("StartAcquisition", [this](int detectorIndex, int currentAppModeKey, int options) {
-    return this->startAcquisition(detectorIndex, currentAppModeKey,options);
-        });
+        emit Message("开始扫描");
+        return this->startAcquisition(detectorIndex, currentAppModeKey,options);
+    });
     // 停止扫描
     server->bind("StopAcquisition", [this](int detectorIndex) {
+        emit Message("停止扫描");
         return this->stopAcquisition(detectorIndex);
         });
     //获取查询状态
@@ -98,11 +107,13 @@ void CareRayServer::bandSDK()
         });
     //暗场校准
     server->bind("StartDarkCalibration", [this](int detr_index, int app_mode_key, int is_traditional_type, int is_update_defect) {
+        emit Message("暗场校准");
         return this->startDarkCalibration(detr_index, app_mode_key, is_traditional_type, is_update_defect);
         });
 
     //亮场校准
     server->bind("StartGainCalibration", [this](int detr_index, int app_mode_key) {
+        emit Message("亮场校准");
         return this->startGainCalibration(detr_index, app_mode_key);
         });
 
@@ -146,6 +157,7 @@ void CareRayServer::startServer()
         m_sendThreadRunning = true;
         m_sendThread = std::thread(&CareRayServer::sendThreadLoop, this);
         //会阻塞
+        emit Message("服务已启动");
         server->run();
     }
     catch (const std::exception& e) {
@@ -166,6 +178,8 @@ void CareRayServer::stopServer()
 
     if (m_zmqPub)
         m_zmqPub->stop();
+
+    emit Message("服务已停止");
 }
 
 void CareRayServer::EventCallback(int detr_index, CrEvent* event)
@@ -282,32 +296,14 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
     {
         case CR_EVT_NEW_FRAME:
         {
-            if (num == 1)
-            {
-                m_firstFrameTime = std::chrono::steady_clock::now();
-            }
-            else
-            {
-                auto now = std::chrono::steady_clock::now();
-                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now - m_firstFrameTime).count();
-                double fps = (num -1) * 1000.0 / elapsedMs;
-                if (num % 30 == 0)
-                {
-                    qDebug() << "当前图像个数：" << num << " 当前帧率：" << fps;
-                }
-            }
-            ++num;
+            //计算帧率
+            processsFps();
             int pixelBytes = event->pixel_depth / 8;
             if (pixelBytes <= 0 || event->width <= 0 || event->height <= 0)
                 return;
 
-            uint32_t imageSize = event->width * event->height * pixelBytes;
-
-            hdr.data_len = imageSize;
-
+            hdr.data_len = event->width * event->height * pixelBytes;
             payload = static_cast<char*>(event->data);
-            return;
             break;
         }
         case CR_EVT_CALIBRATION_IN_PROGRESS:
@@ -325,7 +321,7 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
         }
         case CR_EVT_ACQ_STAT_INFO:
         {
-            qDebug() <<"实际采集总数量" << num;
+            num = 0;
             CrAcquisitionStatInfo* statInfo = reinterpret_cast<CrAcquisitionStatInfo*>(event->data);
             if (statInfo) {
                 QString msg = QString("采集统计: 总帧数=%1, 丢失=%2, 帧率=%3, 速度=%4MB/s")
@@ -333,7 +329,7 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
                     .arg(statInfo->lost_frame_num)
                     .arg(statInfo->frame_rate, 0, 'f', 2)
                     .arg(statInfo->transmission_speed, 0, 'f', 2);
-                qDebug()<< msg;
+                emit Message(msg);
             }
             hdr.data_len = sizeof(CrAcquisitionStatInfo);
             payload = event->data;
@@ -488,11 +484,11 @@ void CareRayServer::enqueueEvent(const ZmqEventHeader& hdr,
 {
     if (!payload || len == 0) return;
 
+    auto now0 = std::chrono::steady_clock::now();
     ZmqEventPacket pkt;
     pkt.header = hdr;
     pkt.payload.resize(len);
     std::memcpy(pkt.payload.data(), payload, len);
-
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
 
@@ -534,4 +530,24 @@ void CareRayServer::sendThreadLoop()
                 pkt.payload.data());
         }
     }
+}
+
+void CareRayServer::processsFps()
+{
+    if (num == 0)
+    {
+        m_firstFrameTime = std::chrono::steady_clock::now();
+    }
+    else if (num > 1)
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - m_firstFrameTime).count();
+        double fps = (num - 1) * 1000.0 / elapsedMs;
+        if (num % 30 == 0)
+        {
+            emit Message(QString("sdk接收图像个数：%1 sdk当前帧率：%2 fps").arg(num).arg(fps, 0, 'f', 2));
+        }
+    }
+    ++num;
 }
