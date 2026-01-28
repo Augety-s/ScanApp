@@ -282,6 +282,21 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
     {
         case CR_EVT_NEW_FRAME:
         {
+            if (num == 1)
+            {
+                m_firstFrameTime = std::chrono::steady_clock::now();
+            }
+            else
+            {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - m_firstFrameTime).count();
+                double fps = (num -1) * 1000.0 / elapsedMs;
+                if (num % 30 == 0)
+                {
+                    qDebug() << "当前图像个数：" << num << " 当前帧率：" << fps;
+                }
+            }
             ++num;
             int pixelBytes = event->pixel_depth / 8;
             if (pixelBytes <= 0 || event->width <= 0 || event->height <= 0)
@@ -292,6 +307,7 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
             hdr.data_len = imageSize;
 
             payload = static_cast<char*>(event->data);
+            return;
             break;
         }
         case CR_EVT_CALIBRATION_IN_PROGRESS:

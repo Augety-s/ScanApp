@@ -139,4 +139,6 @@ private:
 	std::thread m_sendThread;
 	std::atomic<bool> m_sendThreadRunning{ false };
 
+	std::chrono::steady_clock::time_point m_firstFrameTime;
+
 };
