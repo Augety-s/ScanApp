@@ -3,7 +3,6 @@
 #include <zmq.hpp>
 #include <string>
 #include <cstdint>
-
 #pragma pack(push, 1)
 struct ZmqEventHeader
 {
@@ -14,6 +13,7 @@ struct ZmqEventHeader
     int pixel_depth;
     int header_len;
     uint32_t data_len;
+    bool isCompressed;
 };
 
 struct ZmqEventPacket

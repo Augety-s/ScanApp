@@ -71,6 +71,8 @@ target_link_libraries(
     $<$<CONFIG:Debug>:D:/LibDir/zeromq/lib/debug/libzmq-v143-mt-gd-4_3_6.lib>
     $<$<CONFIG:Release>:D:/LibDir/zeromq/lib/release/libzmq-v143-mt-4_3_6.lib>
 	"${CMAKE_CURRENT_SOURCE_DIR}/CareRay/lib/x64/CareRayApi.lib"
+	lz4::lz4
+	
 ) 
 # 确保将正确的runtime DLL复制到输出目录（区分Debug和Release版本）
 add_custom_command(TARGET ${ProjectName} POST_BUILD

@@ -2,6 +2,9 @@
 
 #include <CrStructure.h>
 #include <QImage>
+#include <QBuffer >
+#include <lz4.h>
+#include <lz4hc.h>
 // 保存当前活动的探测器实例，用于回调
 static CareRayServer* s_instance = nullptr;
 
@@ -12,12 +15,66 @@ CareRayServer::CareRayServer(QObject* parent):QObject(parent)
     s_instance = this;
 }
 
-
 CareRayServer::~CareRayServer()
 {
-
+    recoveryDetectorState();
     stopServer();
     deinitializeLibrary();
+}
+
+void CareRayServer::UpdateStatus(Status status)
+{
+    m_status = status;
+    emit StatusChanged(m_status);
+    switch (m_status)
+    {
+    case Status::Status_Connected:
+        emit Message("探测器：连接成功");
+        break;
+    case Status::Status_Disconnected:
+        emit Message("探测器：断开连接");
+        break;
+    case Status::Status_UnLoadSdk:
+        isLoadSdk = false;
+        emit Message("探测器：未初始化");
+        break;
+    case Status::Status_LoadSdk:
+        isLoadSdk = true;
+        emit Message("探测器：初始化成功");
+        break;
+    case Status::AcquisitionStatus_Started:
+        emit Message("探测器：开始采集");
+        break;
+    case Status::AcquisitionStatus_Stopped:
+        emit Message("探测器：停止采集");
+        break;
+    case Status::Status_Error:
+        emit Message("探测器：发生错误");
+        break;
+    default:
+        break;
+    }
+}
+
+void CareRayServer::recoveryDetectorState()
+{
+    switch (m_status)
+    {
+    case Status::AcquisitionStatus_Stopped:
+    case Status::Status_Connected:
+        DisconnectDetector(m_detectorIndex);
+        break;
+    case Status::Status_LoadSdk:
+    case Status::Status_Disconnected:
+        break;
+    case Status::Status_Error:
+    case Status::AcquisitionStatus_Started:
+        stopAcquisition(m_detectorIndex);
+        DisconnectDetector(m_detectorIndex);
+        break;
+    default:
+        break;
+    }
 }
 
 void CareRayServer::bandSDK()
@@ -167,18 +224,23 @@ void CareRayServer::startServer()
 
 void CareRayServer::stopServer()
 {
+
     m_sendThreadRunning = false;
     m_queueCv.notify_all();
-
+    recoveryDetectorState();
     if (m_sendThread.joinable())
         m_sendThread.join();
-
-    if (server)
+    if (server) {
         server->stop();
-
+        delete server;
+        server = nullptr;
+    }
     if (m_zmqPub)
+    {
         m_zmqPub->stop();
-
+        delete m_zmqPub;
+        m_zmqPub = nullptr;
+    }
     emit Message("服务已停止");
 }
 
@@ -207,14 +269,22 @@ std::tuple<int, std::string> CareRayServer::GetSerialNumber(int detectorIndex)
 
 int CareRayServer::LoadSDK()
 {
+    if (isLoadSdk)
+    {
+        return CR_OK;
+    }
     int result = CrInitializeLibrary();
     qDebug() << result;
+    if (result == CR_OK)
+        UpdateStatus(Status::Status_LoadSdk);
     return result;
 }
 
 int CareRayServer::deinitializeLibrary()
 {
     int result = CrDeinitializeLibrary();
+    if (result == CR_OK)
+        UpdateStatus(Status::Status_UnLoadSdk);
     return result;
 }
 
@@ -238,9 +308,9 @@ std::tuple<int, int,std::string> CareRayServer::GetDetectorList()
     }
 
     // 使用第一个探测器
-    int m_detectorIndex = detectorArray[0].index;
-
-    return {result,m_detectorIndex ,std::string(detectorArray[0].ip_addr)};
+    int detectorIndex = detectorArray[0].index;
+    m_detectorIndex = detectorIndex;
+    return {result,detectorIndex ,std::string(detectorArray[0].ip_addr)};
 
 }
 
@@ -264,12 +334,16 @@ bool CareRayServer::ConfigureDetector(int detectorIndex)
 int CareRayServer::ConnectDetector(int detectorIndex)
 {
     int result = CrConnect(detectorIndex);
+    if (result == CR_OK)
+        UpdateStatus(Status::Status_Connected);
     return result;
 }
 
 int CareRayServer::DisconnectDetector(int detectorIndex)
 {
     int result = CrDisconnect(detectorIndex);
+    if (result == CR_OK)
+        UpdateStatus(Status::Status_Disconnected);
     return result;
 }
 
@@ -301,9 +375,23 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
             int pixelBytes = event->pixel_depth / 8;
             if (pixelBytes <= 0 || event->width <= 0 || event->height <= 0)
                 return;
-
+            //void* pimagedata = static_cast<char*>(event->data) + event->header_len;
+            //QImage image(static_cast<const uchar*>(pimagedata), event->width, event->height,
+            //    QImage::Format_Grayscale16);
+            //QByteArray byteArray;
+            //QBuffer buffer(&byteArray);
+            //buffer.open(QIODevice::WriteOnly);
+            //bool saved = image.save(&buffer, "PNG"); // 使用png格式进行无损压缩
+            //if (!saved) {
+            //    qWarning() << "failed to compress image to PNG";
+            //    return;
+            //}
+            //hdr.data_len = static_cast<uint32_t>(byteArray.size());
+            //enqueueEvent(hdr, byteArray.constData(), hdr.data_len); // constdata() 更安全
+            //return;
+            void* pImageData = static_cast<char*>(event->data) + event->header_len;
             hdr.data_len = event->width * event->height * pixelBytes;
-            payload = static_cast<char*>(event->data);
+            payload = static_cast<char*>(pImageData);
             break;
         }
         case CR_EVT_CALIBRATION_IN_PROGRESS:
@@ -321,6 +409,7 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
         }
         case CR_EVT_ACQ_STAT_INFO:
         {
+            emit Message(QString("sdk接收图像总数量：%1").arg(num));
             num = 0;
             CrAcquisitionStatInfo* statInfo = reinterpret_cast<CrAcquisitionStatInfo*>(event->data);
             if (statInfo) {
@@ -373,12 +462,16 @@ bool CareRayServer::getModeInfoByAppModeKey(int detectorIndex, int  currentAppMo
 int CareRayServer::startAcquisition(int detectorIndex, int currentAppModeKey, int options)
 {
     int result = CrStartAcquisitionWithCorrOpt(detectorIndex, currentAppModeKey, options, 1);
+    if (result == CR_OK)
+        UpdateStatus(Status::AcquisitionStatus_Started);
     return result;
 }
 
 int CareRayServer::stopAcquisition(int detectorIndex)
 {
     int result = CrStopAcquisition(detectorIndex);
+    if (result == CR_OK)
+        UpdateStatus(Status::AcquisitionStatus_Stopped);
     return result;
 }
 
@@ -526,6 +619,9 @@ void CareRayServer::sendThreadLoop()
         // 真正发送
         if (m_zmqPub)
         {
+            //压缩图像数据
+            compressedImage(pkt);
+            pkt.header.isCompressed = true;
             m_zmqPub->publish(pkt.header,
                 pkt.payload.data());
         }
@@ -550,4 +646,43 @@ void CareRayServer::processsFps()
         }
     }
     ++num;
+}
+
+void CareRayServer::compressedImage(ZmqEventPacket& pack)
+{
+    if (pack.header.event_id != CR_EVT_NEW_FRAME)
+        return;
+    auto begin = std::chrono::steady_clock::now();
+
+    const int srcSize = static_cast<int>(pack.payload.size());
+    if (srcSize <= 0)
+        return;
+    // LZ4 最大压缩空间
+    const int maxCompressedSize = LZ4_compressBound(srcSize);
+
+    std::vector<uint8_t> compressed(maxCompressedSize);
+
+    // 压缩级别：1 ~ 12（常用 6~9）
+    const int compressionLevel = 8;
+
+    //高压缩 LZ4_compress_HC
+
+    int compressedSize = LZ4_compress_default(
+        reinterpret_cast<const char*>(pack.payload.data()),
+        reinterpret_cast<char*>(compressed.data()),
+        srcSize,
+        maxCompressedSize
+    );
+    if (compressedSize <= 0) {
+        qWarning() << "LZ4 compress failed";
+        return;
+    }
+    compressed.resize(compressedSize);
+    pack.payload.swap(compressed);
+    pack.header.data_len = static_cast<uint32_t>(compressedSize);
+    //emit Message(QString("压缩后图像大小：%1").arg(pack.header.data_len));
+    auto end = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        end - begin).count();
+    //emit Message(QString("图像压缩耗时：%1 ms").arg(elapsedMs, 0, 'f', 2));
 }

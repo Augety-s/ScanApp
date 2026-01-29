@@ -16,11 +16,27 @@ class CareRayServer : public QObject
 	Q_OBJECT
 public:
 
+	enum Status {
+		Status_UnLoadSdk,           // 未加载sdk
+		Status_LoadSdk,             // 已加载sdk
+		Status_Disconnected,            // 未连接
+		Status_Connected,               // 已连接
+		AcquisitionStatus_Stopped,      // 已停止采集
+		AcquisitionStatus_Started,      // 已开始采集
+		Status_Error                    // 错误状态
+	};
+	Q_ENUM(Status)
+
+
 	CareRayServer(QObject* parent = nullptr);
 	~CareRayServer();
 	void bandSDK();
 	void startServer();
 	void stopServer();
+
+	void UpdateStatus(Status status);
+
+	void recoveryDetectorState();
 
 	std::tuple<int, std::string> GetSerialNumber(int detectorIndex);
 
@@ -120,8 +136,17 @@ public:
 	//计算帧率
 	void processsFps();
 
+	//压缩图像
+	void compressedImage(ZmqEventPacket &pack);
+
 signals:
 	void Message(QString message);
+
+	/**
+	 * \brief 状态改变信号
+	 * \param status 新状态
+	 */
+	void StatusChanged(Status status);
 
 private:
 	void sendThreadLoop();
@@ -129,6 +154,9 @@ private:
 	void enqueueEvent(const ZmqEventHeader& hdr,
 		const void* payload,
 		uint32_t len);
+
+public:
+	int m_detectorIndex=0;
 
 private:
 	rpc::server* server = nullptr;
@@ -147,6 +175,10 @@ private:
 	std::atomic<bool> m_sendThreadRunning{ false };
 
 	std::chrono::steady_clock::time_point m_firstFrameTime;
+
+	Status m_status = Status_UnLoadSdk;
+
+	bool isLoadSdk = false;
 
 };
 #endif // CARERAYSERVER_H

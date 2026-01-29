@@ -89,6 +89,13 @@ else()
    find_package(RPCLIB REQUIRED PATHS "D:/LibDir/rpclib/release/lib/cmake/rpclib")
 endif()
 
+# lz4包
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    find_package(LZ4 REQUIRED PATHS "D:/LibDir/lz4/debug/lib/cmake/lz4")
+else()
+   find_package(LZ4 REQUIRED PATHS "D:/LibDir/lz4/release/lib/cmake/lz4")
+endif()
+
 #find dcmtk
 find_package(DCMTK REQUIRED PATHS "D:/LibDir/dcmtk3.6/cmake")
 

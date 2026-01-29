@@ -16,6 +16,9 @@ ZmqPublisher::~ZmqPublisher()
 }
 void ZmqPublisher::start()
 {
+    // 重新创建 socket，方便下次 start
+    pub_ = zmq::socket_t(ctx_, zmq::socket_type::pub);
+    pub_.set(zmq::sockopt::linger, 0);
     std::string addr = "tcp://" + m_bind_ip + ":" + std::to_string(m_port);
     pub_.bind(addr);
 }
@@ -25,10 +28,6 @@ void ZmqPublisher::stop()
     if (pub_)
     {
         pub_.close();
-
-        // 重新创建 socket，方便下次 start
-        pub_ = zmq::socket_t(ctx_, zmq::socket_type::pub);
-        pub_.set(zmq::sockopt::linger, 0);
     }
 }
 
