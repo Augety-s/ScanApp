@@ -5,6 +5,8 @@
 #include <QBuffer >
 #include <lz4.h>
 #include <lz4hc.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp> 
 // 保存当前活动的探测器实例，用于回调
 static CareRayServer* s_instance = nullptr;
 
@@ -375,24 +377,43 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
             int pixelBytes = event->pixel_depth / 8;
             if (pixelBytes <= 0 || event->width <= 0 || event->height <= 0)
                 return;
-            //void* pimagedata = static_cast<char*>(event->data) + event->header_len;
-            //QImage image(static_cast<const uchar*>(pimagedata), event->width, event->height,
-            //    QImage::Format_Grayscale16);
-            //QByteArray byteArray;
-            //QBuffer buffer(&byteArray);
-            //buffer.open(QIODevice::WriteOnly);
-            //bool saved = image.save(&buffer, "PNG"); // 使用png格式进行无损压缩
-            //if (!saved) {
-            //    qWarning() << "failed to compress image to PNG";
-            //    return;
-            //}
-            //hdr.data_len = static_cast<uint32_t>(byteArray.size());
-            //enqueueEvent(hdr, byteArray.constData(), hdr.data_len); // constdata() 更安全
-            //return;
-            void* pImageData = static_cast<char*>(event->data) + event->header_len;
-            hdr.data_len = event->width * event->height * pixelBytes;
-            payload = static_cast<char*>(pImageData);
-            break;
+
+            // 原始图像
+            cv::Mat srcMat(
+                event->height,
+                event->width,
+                CV_16UC1,
+                static_cast<uint8_t*>(event->data) + event->header_len,
+                event->width * pixelBytes
+            );
+
+            int roi_x = 0;
+            int roi_y = 0;
+            int roi_w = 1536;
+            int roi_h = 512;
+
+            // 边界保护
+            cv::Rect roi(roi_x, roi_y, roi_w, roi_h);
+            if ((roi & cv::Rect(0, 0, srcMat.cols, srcMat.rows)) != roi)
+            {
+                qWarning() << "ROI out of range";
+                return;
+            }
+
+            // 裁剪（这里不拷贝，只是视图）
+            cv::Mat roiMat = srcMat(roi);
+
+            // ⚠️ 必须 clone（SDK buffer 会复用）
+            cv::Mat croppedMat = roiMat.clone();
+
+            // 填 header
+            hdr.width = roi_w;
+            hdr.height = roi_h;
+            hdr.data_len = croppedMat.total() * croppedMat.elemSize();
+
+            // 入队（拷贝的是 clone 后的安全数据）
+            enqueueEvent(hdr, croppedMat.data, hdr.data_len);
+            return;
         }
         case CR_EVT_CALIBRATION_IN_PROGRESS:
         case CR_EVT_CALIBRATION_FINISHED:
@@ -620,8 +641,8 @@ void CareRayServer::sendThreadLoop()
         if (m_zmqPub)
         {
             //压缩图像数据
-            compressedImage(pkt);
-            pkt.header.isCompressed = true;
+            //compressedImage(pkt);
+            pkt.header.isCompressed = false;
             m_zmqPub->publish(pkt.header,
                 pkt.payload.data());
         }

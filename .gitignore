@@ -6,3 +6,4 @@ cmake.db
 ProjectSettings.json
 slnx.sqlite
 VSWorkspaceState.json
+bin
