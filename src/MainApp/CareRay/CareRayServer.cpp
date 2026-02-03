@@ -377,43 +377,52 @@ void CareRayServer::onSdkEvent(int detr_index, CrEvent* event)
             int pixelBytes = event->pixel_depth / 8;
             if (pixelBytes <= 0 || event->width <= 0 || event->height <= 0)
                 return;
-
-            // 原始图像
-            cv::Mat srcMat(
-                event->height,
-                event->width,
-                CV_16UC1,
-                static_cast<uint8_t*>(event->data) + event->header_len,
-                event->width * pixelBytes
-            );
-
-            int roi_x = 0;
-            int roi_y = 0;
-            int roi_w = 1536;
-            int roi_h = 512;
-
-            // 边界保护
-            cv::Rect roi(roi_x, roi_y, roi_w, roi_h);
-            if ((roi & cv::Rect(0, 0, srcMat.cols, srcMat.rows)) != roi)
+            if(isCrop)
             {
-                qWarning() << "ROI out of range";
+                // 原始图像
+                cv::Mat srcMat(
+                    event->height,
+                    event->width,
+                    CV_16UC1,
+                    static_cast<uint8_t*>(event->data) + event->header_len,
+                    event->width * pixelBytes
+                );
+
+                // 边界保护
+                cv::Rect roi(roi_x, roi_y, roi_w, roi_h);
+                if ((roi & cv::Rect(0, 0, srcMat.cols, srcMat.rows)) != roi)
+                {
+                    emit Message("ROI out of range");
+                    return;
+                }
+                if (roi.empty())
+                {
+                    emit Message("empty ROI");
+                    return;
+                }
+
+                // 裁剪（这里不拷贝，只是视图）
+                cv::Mat roiMat = srcMat(roi);
+
+                // ⚠️ 必须 clone（SDK buffer 会复用）
+                cv::Mat croppedMat = roiMat.clone();
+
+                // 填 header
+                hdr.width = roi_w;
+                hdr.height = roi_h;
+                hdr.data_len = croppedMat.total() * croppedMat.elemSize();
+                // 入队（拷贝的是 clone 后的安全数据）
+                enqueueEvent(hdr, croppedMat.data, hdr.data_len);
                 return;
             }
-
-            // 裁剪（这里不拷贝，只是视图）
-            cv::Mat roiMat = srcMat(roi);
-
-            // ⚠️ 必须 clone（SDK buffer 会复用）
-            cv::Mat croppedMat = roiMat.clone();
-
-            // 填 header
-            hdr.width = roi_w;
-            hdr.height = roi_h;
-            hdr.data_len = croppedMat.total() * croppedMat.elemSize();
-
-            // 入队（拷贝的是 clone 后的安全数据）
-            enqueueEvent(hdr, croppedMat.data, hdr.data_len);
-            return;
+            else
+            {
+                uint32_t imageSize = event->width * event->height * pixelBytes;
+                hdr.data_len = imageSize;
+                void* pImageData = static_cast<char*>(event->data) + event->header_len;
+                payload = static_cast<char*>(pImageData);
+                break;
+            }
         }
         case CR_EVT_CALIBRATION_IN_PROGRESS:
         case CR_EVT_CALIBRATION_FINISHED:
@@ -641,8 +650,7 @@ void CareRayServer::sendThreadLoop()
         if (m_zmqPub)
         {
             //压缩图像数据
-            //compressedImage(pkt);
-            pkt.header.isCompressed = false;
+            compressedImage(pkt);
             m_zmqPub->publish(pkt.header,
                 pkt.payload.data());
         }
@@ -671,7 +679,7 @@ void CareRayServer::processsFps()
 
 void CareRayServer::compressedImage(ZmqEventPacket& pack)
 {
-    if (pack.header.event_id != CR_EVT_NEW_FRAME)
+    if (pack.header.event_id != CR_EVT_NEW_FRAME|| !isCompress)
         return;
     auto begin = std::chrono::steady_clock::now();
 
@@ -688,11 +696,12 @@ void CareRayServer::compressedImage(ZmqEventPacket& pack)
 
     //高压缩 LZ4_compress_HC
 
-    int compressedSize = LZ4_compress_default(
+    int compressedSize = LZ4_compress_HC(
         reinterpret_cast<const char*>(pack.payload.data()),
         reinterpret_cast<char*>(compressed.data()),
         srcSize,
-        maxCompressedSize
+        maxCompressedSize,
+        compressLevel
     );
     if (compressedSize <= 0) {
         qWarning() << "LZ4 compress failed";
@@ -701,6 +710,7 @@ void CareRayServer::compressedImage(ZmqEventPacket& pack)
     compressed.resize(compressedSize);
     pack.payload.swap(compressed);
     pack.header.data_len = static_cast<uint32_t>(compressedSize);
+    pack.header.isCompressed = true;
     //emit Message(QString("压缩后图像大小：%1").arg(pack.header.data_len));
     auto end = std::chrono::steady_clock::now();
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(

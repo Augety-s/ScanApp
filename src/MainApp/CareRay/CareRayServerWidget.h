@@ -11,6 +11,8 @@ public:
 	CareRayServerWidget(QWidget *parent = nullptr);
 	~CareRayServerWidget();
 
+	void initUi();
+
 	void onDetectorStatusChanged(CareRayServer::Status status);
 
 private:

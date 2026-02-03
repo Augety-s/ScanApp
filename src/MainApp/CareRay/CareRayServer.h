@@ -158,6 +158,19 @@ private:
 public:
 	int m_detectorIndex=0;
 
+	//是否压缩
+	bool isCompress = false;
+	//压缩等级
+	int compressLevel = 8;
+
+	//是否裁剪
+	bool isCrop = false;
+
+	int roi_x = 0;
+	int roi_y = 0;
+	int roi_w = 0;
+	int roi_h = 0;
+
 private:
 	rpc::server* server = nullptr;
 	ZmqPublisher* m_zmqPub = nullptr;
